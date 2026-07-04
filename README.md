@@ -29,12 +29,13 @@ downloadable engine for machines without a Python/PyTorch toolchain.
 ```sh
 cargo build --release           # produces target/release/nexis-ml(.exe)
 
-nexis-ml --version              # → "nexis-ml 0.7.0" (Nexis-detectable)
+nexis-ml --version              # → "nexis-ml 0.8.0" (Nexis-detectable)
 nexis-ml env                    # one-line JSON capability report (backend: cpu|wgpu)
 nexis-ml new tabular my-run     # scaffold a project (templates: tabular | image)
 nexis-ml train my-run           # train; writes .nexis-ml/runs/<id>/
 nexis-ml --nexis-protocol train my-run   # stream NDJSON protocol on stdout
 nexis-ml export --onnx my-run   # train the MLP and write my-run/model.onnx
+nexis-ml serve --run <id> my-run # inference loop: one JSON request per stdin line
 ```
 
 The shipped binary targets a portable CPU baseline. If you're building only
@@ -122,7 +123,8 @@ Stop and Pause buttons work against either engine.
 | `src/harness.rs` | `Run` lifecycle + stdin control watcher (cancel/pause/resume) |
 | `src/model.rs` | the `train` command's `burn` MLP + CNN (CPU/GPU), device selection, CSV/synthetic + image data |
 | `src/onnx.rs` | dependency-free ONNX writer for the tabular MLP (`export --onnx`) |
-| `src/main.rs` | CLI (`--version` / `env` / `new` / `train` / `export`) |
+| `src/serve.rs` | `serve` inference loop (burn-free forward pass over the saved weights) |
+| `src/main.rs` | CLI (`--version` / `env` / `new` / `train` / `export` / `serve`) |
 
 ## License
 

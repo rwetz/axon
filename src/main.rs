@@ -8,7 +8,8 @@
 //! speaking the same NDJSON protocol and writing the same run store as the
 //! Python `nexis-ml`, so Nexis consumes either with no changes.
 //!
-//! Commands: --version | env | new <template> [dir] | train [dir] | export --onnx [dir]
+//! Commands: --version | env | new <template> [dir] | train [dir] |
+//!           export --onnx [dir] | serve --run <id> [dir]
 //! Exit codes: 0 ok, 1 error, 2 usage.
 
 mod harness;
@@ -16,6 +17,7 @@ mod model;
 mod onnx;
 mod protocol;
 mod run_store;
+mod serve;
 
 use std::path::Path;
 
@@ -46,15 +48,42 @@ fn run() -> i32 {
         Some("new") => cmd_new(&positionals(&args, "new")),
         Some("train") => cmd_train(&positionals(&args, "train"), &emitter),
         Some("export") => cmd_export(&args, &positionals(&args, "export"), &emitter),
+        Some("serve") => cmd_serve(&args),
         Some(other) => {
             eprintln!("error: unknown command: {other}");
             2
         }
         None => {
-            eprintln!("usage: nexis-ml [--version] <env|new|train|export> [dir]");
+            eprintln!("usage: nexis-ml [--version] <env|new|train|export|serve> [dir]");
             2
         }
     }
+}
+
+/// `serve --run <id> [--checkpoint best] [dir]` — the Playground's inference
+/// loop (see serve.rs). `--checkpoint` is accepted for CLI compatibility with
+/// the Python engine but ignored: this engine keeps only the best checkpoint.
+fn cmd_serve(args: &[String]) -> i32 {
+    let value_of = |name: &str| {
+        args.iter()
+            .position(|a| a == name)
+            .and_then(|i| args.get(i + 1))
+            .cloned()
+    };
+    let Some(run_id) = value_of("--run") else {
+        eprintln!("usage: nexis-ml serve --run <run-id> [--checkpoint best] [dir]");
+        return 2;
+    };
+    // The project dir is the first positional that isn't a flag's value.
+    let flag_values: Vec<String> = ["--run", "--checkpoint"]
+        .iter()
+        .filter_map(|f| value_of(f))
+        .collect();
+    let dir = positionals(args, "serve")
+        .into_iter()
+        .find(|p| !flag_values.contains(p))
+        .unwrap_or_else(|| ".".into());
+    serve::serve(Path::new(&dir), &run_id)
 }
 
 /// Non-flag args after the command token (the command itself dropped once).
@@ -93,6 +122,9 @@ fn cmd_env() -> i32 {
         "cudaAvailable": false,
         "gpuName": serde_json::Value::Null,
         "backend": backend,
+        // Capability flag: Nexis gates its Playground on this (older engine
+        // versions without `serve` simply don't report it).
+        "serve": true,
     });
     println!("{}", serde_json::to_string(&info).unwrap_or_default());
     0

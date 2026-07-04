@@ -6,6 +6,32 @@ This engine speaks the same protocol and writes the same run store as the
 Python [`nexis-ml`](https://github.com/rwetz/nexis-ml) — see
 [PLAN.md](PLAN.md) for the milestone-by-milestone story.
 
+## [0.8.0] — 2026-07-02 — serve: the Playground works without Python
+
+### Added
+- **`serve --run <id> [dir]`** — the inference loop behind Nexis's Playground,
+  speaking the same NDJSON serve dialect as the Python engine: one `ready`
+  event (with `features`/`classes`/`task` meta for the input form), then one
+  `prediction`/`error` per JSON request line on stdin; EOF ends the session.
+  Requests take raw feature values; missing features default to the training
+  mean. Serving is burn-free — a plain-`Vec<f32>` standardize → dense/ReLU →
+  softmax pass over the saved weights — so it starts instantly on CPU.
+  `--checkpoint` is accepted for Python-CLI compatibility and ignored (only
+  the best checkpoint is kept). Image (CNN) runs and runs trained by engines
+  < 0.8 report a clear `error` instead of crashing.
+- **`train` now persists the tabular MLP's weights** —
+  `checkpoints/best-weights.json` (`{"layers":[{"in":I,"out":O,"w":[[…]],"b":[…]}]}`,
+  `w[i][j]` = in-unit i → out-unit j), the file `serve` reloads. This closes
+  the old "burn weight serialization arrives with the inference milestone"
+  gap; `best.json` metadata is unchanged.
+- **Per-epoch `weights` artifact** — every eval also emits
+  `{"ev":"artifact","kind":"weights","path":"…/weights-epochN.json"}` (same
+  JSON shape), which Nexis's network graph renders as live connection
+  strengths. Skipped above 200k weights so a huge user-configured MLP can't
+  write ~12 MB per epoch; the serve checkpoint is written regardless.
+- **`env` reports `"serve": true`** — the capability flag Nexis gates its
+  Playground on (older engine versions simply don't report it).
+
 ## [0.7.0] — 2026-06-25
 
 ### Changed

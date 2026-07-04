@@ -1,6 +1,6 @@
 [package]
 name = "nexis-ml-rs"
-version = "0.7.0"
+version = "0.8.0"
 edition = "2021"
 description = "Python-free, single-binary ML engine for the Nexis terminal (Phase 3) — same NDJSON protocol and run store as nexis-ml."
 license = "Apache-2.0"

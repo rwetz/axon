@@ -622,6 +622,13 @@ fn run_training<B: AutodiffBackend>(
     let y_val = to_targets::<B>(&data.val_y, &device); // hoisted: identical every epoch
     let mut best_val = f64::INFINITY;
 
+    // Layer dims [features, hidden.., classes] for the weight dumps below.
+    let mut dims = Vec::with_capacity(hidden.len() + 2);
+    dims.push(n_features);
+    dims.extend_from_slice(&hidden);
+    dims.push(n_classes);
+    let n_weights: usize = dims.windows(2).map(|w| w[0] * w[1]).sum();
+
     for epoch in 1..=cfg.epochs {
         // Reshuffle the row order each epoch (one on-device gather) so the
         // minibatches differ across epochs — standard SGD, better convergence
@@ -677,10 +684,22 @@ fn run_training<B: AutodiffBackend>(
 
         write_cm_artifact(&mut run, epoch, &data.classes, &cm);
 
+        // Per-epoch weights artifact → the panel's network graph animates
+        // connection strengths live. Skipped for very large stacks (the
+        // serve checkpoint below is written regardless).
+        if n_weights <= MAX_WEIGHTS_ARTIFACT {
+            let wpath = run
+                .artifacts_dir()
+                .join(format!("weights-epoch{epoch}.json"));
+            let _ = fs::write(
+                &wpath,
+                serde_json::to_string(&weights_json(&model, &dims)).unwrap_or_default(),
+            );
+            run.artifact("weights", &wpath);
+        }
+
         if vloss < best_val {
             best_val = vloss;
-            // Checkpoint metadata (burn weight serialization arrives with
-            // the inference milestone); enough to satisfy the contract.
             let ckpt = json!({
                 "classes": data.classes, "features": data.feature_names,
                 "hidden": hidden, "mean": data.mean, "std": data.std,
@@ -688,6 +707,12 @@ fn run_training<B: AutodiffBackend>(
             let _ = fs::write(
                 run.checkpoints_dir().join("best.json"),
                 serde_json::to_string_pretty(&ckpt).unwrap_or_default(),
+            );
+            // The weights `serve` reloads (dependency-free forward pass) —
+            // same JSON shape as the artifact above.
+            let _ = fs::write(
+                run.checkpoints_dir().join("best-weights.json"),
+                serde_json::to_string(&weights_json(&model, &dims)).unwrap_or_default(),
             );
         }
 
@@ -1102,6 +1127,44 @@ fn fit_mlp(data: &Prepared, cfg: &TrainCfg, hidden: &[usize]) -> Mlp<Autodiff<Nd
     }
     model
 }
+
+/// The dense stack as JSON — `w` normalized to `[in][out]` orientation and
+/// bias included. This one shape serves two consumers (contract documented
+/// in the Nexis repo's ML_SUITE.md): the per-epoch `weights` artifact behind
+/// the panel's network-graph overlay, and the `checkpoints/best-weights.json`
+/// file `serve` reloads for inference.
+fn weights_json<B: Backend>(model: &Mlp<B>, dims: &[usize]) -> serde_json::Value {
+    let layers: Vec<serde_json::Value> = model
+        .layers
+        .iter()
+        .enumerate()
+        .map(|(i, l)| {
+            let d = dense_of(l, dims[i], dims[i + 1]);
+            let (in_dim, out_dim) = (d.in_dim, d.out_dim);
+            let mut w = vec![vec![0.0f32; out_dim]; in_dim];
+            if (d.w_rows, d.w_cols) == (out_dim, in_dim) {
+                // stored [out, in] → transpose to [in][out]
+                for (r, row) in d.weight.chunks(in_dim).enumerate() {
+                    for (c, &v) in row.iter().enumerate() {
+                        w[c][r] = v;
+                    }
+                }
+            } else {
+                for (row, src) in w.iter_mut().zip(d.weight.chunks(out_dim)) {
+                    row.copy_from_slice(src);
+                }
+            }
+            json!({ "in": in_dim, "out": out_dim, "w": w, "b": d.bias })
+        })
+        .collect();
+    json!({ "layers": layers })
+}
+
+/// Above this many weights, skip the per-epoch `weights` artifact (a
+/// user-configured 1024×1024 MLP would write ~12 MB per epoch). The
+/// best-weights checkpoint (written once per improvement) is always kept
+/// so `serve` works regardless of model size.
+const MAX_WEIGHTS_ARTIFACT: usize = 200_000;
 
 /// Read a trained `Linear`'s weights as raw f32 + its stored shape (layout
 /// may be `[in, out]` or `[out, in]`; `onnx::Dense` records both so Gemm
