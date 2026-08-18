@@ -5,23 +5,23 @@
 # nexis-ml-rs
 
 A **Python-free, single-binary** ML engine for the [Nexis](https://github.com/rwetz/Nexis)
-terminal — Phase 3 of the ML Suite (see `ML_SUITE.md` in the Nexis repo).
+terminal, Phase 3 of the ML Suite (see `ML_SUITE.md` in the Nexis repo).
 
 It speaks the **same NDJSON protocol** and writes the **same run store** as
 the Python [`nexis-ml`](https://github.com/rwetz/nexis-ml) engine, so Nexis
 renders runs from either with zero changes. The goal: an LSP-style
 downloadable engine for machines without a Python/PyTorch toolchain.
 
-> **Status: Phase 3 complete (M1–M6) — real `burn` MLP + CNN (CPU *and* GPU), ONNX export, Nexis-integrated.** Protocol, run store, and
+> **Status: Phase 3 complete (M1–M6): real `burn` MLP + CNN (CPU *and* GPU), ONNX export, Nexis-integrated.** Protocol, run store, and
 > CLI are complete and verified end-to-end (a Rust-produced run is read by the
-> Python `nexis-ml runs`). `train` runs on [`burn`](https://github.com/tracel-ai/burn) —
+> Python `nexis-ml runs`). `train` runs on [`burn`](https://github.com/tracel-ai/burn):
 > pick the backend with `[train] device` (`auto`/`cpu`/`gpu`): GPU runs on
 > burn's **wgpu** backend (Vulkan/DX12/Metal, no vendor toolchain), CPU on
 > ndarray; both with autodiff. The model is **declared in `train.toml`**: a
 > CSV `[data] path` (or none → synthetic) trains a variable-depth MLP; a
 > folder of class sub-folders trains a CNN over its images. `export --onnx`
 > (tabular MLP) and Nexis download + detect are both shipped, so the panel
-> can fetch and run this engine on a machine with no Python — see
+> can fetch and run this engine on a machine with no Python; see
 > [PLAN.md](PLAN.md). (CNN ONNX export is the one remaining follow-up.)
 
 ## Build & run
@@ -43,7 +43,7 @@ for your own machine, a native-tuned build lets the CPU backend use your
 processor's SIMD (AVX2/AVX-512):
 
 ```sh
-RUSTFLAGS="-C target-cpu=native" cargo build --release   # local builds only — not portable
+RUSTFLAGS="-C target-cpu=native" cargo build --release   # local builds only, not portable
 ```
 
 ### CPU or GPU
@@ -52,23 +52,23 @@ Set `[train] device` in `train.toml`:
 
 | value | backend |
 |---|---|
-| `auto` (default) | ndarray CPU backend — fastest for the small models this engine trains |
+| `auto` (default) | ndarray CPU backend, fastest for the small models this engine trains |
 | `cpu` | ndarray CPU backend |
 | `gpu` / `cuda` / `wgpu` | GPU via wgpu (warns and falls back to CPU if none) |
 
 `auto` trains on **CPU** on purpose: for the model sizes this engine builds
 (small MLPs and a 2-conv CNN) the ndarray backend beats wgpu, whose
 per-process init + adapter probe + kernel autotune (seconds) dwarfs the
-actual training. The GPU is **opt-in** — set `device = "gpu"`, where it pays
+actual training. The GPU is **opt-in**: set `device = "gpu"`, where it pays
 off only on larger workloads.
 
-The GPU path uses burn's **wgpu** backend (Vulkan/DX12/Metal/OpenGL) — no
+The GPU path uses burn's **wgpu** backend (Vulkan/DX12/Metal/OpenGL), with no
 CUDA or vendor toolchain required, so the same binary uses the GPU on any
 modern machine. GPU runs emit a per-epoch `mem/gpu_mb` footprint metric.
 
 ### The model (declarative)
 
-The model is described in `train.toml`, not code — chosen by what `[data]
+The model is described in `train.toml`, not code, and is chosen by what `[data]
 path` points at:
 
 | `[data] path` | model | `[model]` keys |
@@ -84,7 +84,7 @@ per-epoch confusion matrix plus an `image-grid` PNG of sample predictions.
 ### ONNX export
 
 `nexis-ml export --onnx [dir]` trains the tabular MLP from `train.toml` and
-writes `<dir>/model.onnx` — a portable model for `ort`/onnxruntime inference
+writes `<dir>/model.onnx`, a portable model for `ort`/onnxruntime inference
 without Python. Standardization is baked into the graph, so it takes **raw
 features** (input name `input`) and returns class logits (`output`). burn has
 no native ONNX export, so the protobuf is hand-encoded (no extra dependency);
@@ -92,7 +92,7 @@ the export is verified against onnxruntime for an exact prediction match.
 (CNN/image ONNX export is a follow-up.)
 
 The binary is named `nexis-ml` (not `nexis-ml-rs`) so Nexis detects and
-spawns it exactly like the Python engine — the two are never on `PATH`
+spawns it exactly like the Python engine; the two are never on `PATH`
 together; this one is downloaded to its own directory.
 
 ## Compatibility
@@ -109,9 +109,9 @@ Same `protocol` version (1), same `metric`/`epoch`/`artifact`/
 `summary.json` / `artifacts/` layout.
 
 In protocol mode the engine also honors the same stdin **control commands**
-as the Python harness — `{"cmd":"cancel"}` (stop gracefully and finish as
+as the Python harness: `{"cmd":"cancel"}` (stop gracefully and finish as
 `cancelled`, keeping the last checkpoint), `{"cmd":"pause"}` /
-`{"cmd":"resume"}` (block/release at the next epoch boundary) — so Nexis's
+`{"cmd":"resume"}` (block/release at the next epoch boundary), so Nexis's
 Stop and Pause buttons work against either engine.
 
 ## Layout
