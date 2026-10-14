@@ -2,129 +2,156 @@
   <img src="assets/nexis-icon.png" alt="Nexis" width="120" height="120">
 </p>
 
-# nexis-ml-rs
+# Axon
 
-A **Python-free, single-binary** ML engine for the [Nexis](https://github.com/rwetz/Nexis)
-terminal, Phase 3 of the ML Suite (see `ML_SUITE.md` in the Nexis repo).
+A **single-binary ML engine** for the [Nexis](https://github.com/rwetz/Nexis)
+terminal. Axon trains the models behind Nexis's **Synapse** lab: small MLPs
+over spreadsheets and small CNNs over folders of images, on the CPU or on any
+GPU through wgpu. No Python, no PyTorch, no vendor toolchain.
 
-It speaks the **same NDJSON protocol** and writes the **same run store** as
-the Python [`nexis-ml`](https://github.com/rwetz/nexis-ml) engine, so Nexis
-renders runs from either with zero changes. The goal: an LSP-style
-downloadable engine for machines without a Python/PyTorch toolchain.
+Nexis downloads a pinned, checksum-verified Axon release and drives it over a
+line-oriented NDJSON protocol; Axon also works on its own from any terminal.
 
-> **Status: Phase 3 complete (M1–M6): real `burn` MLP + CNN (CPU *and* GPU), ONNX export, Nexis-integrated.** Protocol, run store, and
-> CLI are complete and verified end-to-end (a Rust-produced run is read by the
-> Python `nexis-ml runs`). `train` runs on [`burn`](https://github.com/tracel-ai/burn):
-> pick the backend with `[train] device` (`auto`/`cpu`/`gpu`): GPU runs on
-> burn's **wgpu** backend (Vulkan/DX12/Metal, no vendor toolchain), CPU on
-> ndarray; both with autodiff. The model is **declared in `train.toml`**: a
-> CSV `[data] path` (or none → synthetic) trains a variable-depth MLP; a
-> folder of class sub-folders trains a CNN over its images. `export --onnx`
-> (tabular MLP) and Nexis download + detect are both shipped, so the panel
-> can fetch and run this engine on a machine with no Python; see
-> [PLAN.md](PLAN.md). (CNN ONNX export is the one remaining follow-up.)
+> Axon was called `nexis-ml-rs` up to v0.8. The Python `nexis-ml` engine it
+> was written to match is phased out; Axon is the engine Nexis supports.
 
 ## Build & run
 
 ```sh
-cargo build --release           # produces target/release/nexis-ml(.exe)
+cargo build --release          # produces target/release/axon(.exe)
 
-nexis-ml --version              # → "nexis-ml 0.8.0" (Nexis-detectable)
-nexis-ml env                    # one-line JSON capability report (backend: cpu|wgpu)
-nexis-ml new tabular my-run     # scaffold a project (templates: tabular | image)
-nexis-ml train my-run           # train; writes .nexis-ml/runs/<id>/
-nexis-ml --nexis-protocol train my-run   # stream NDJSON protocol on stdout
-nexis-ml export --onnx my-run   # train the MLP and write my-run/model.onnx
-nexis-ml serve --run <id> my-run # inference loop: one JSON request per stdin line
+axon --version                 # → "axon 0.9.0"
+axon env                       # one-line JSON capability report
+axon new tabular my-run        # scaffold a project (templates: tabular | image)
+axon train my-run              # train; writes my-run/.nexis-ml/runs/<id>/
+axon --nexis-protocol train my-run   # stream NDJSON events on stdout
+axon serve --run <id> my-run   # inference loop: one JSON request per stdin line
+axon export --onnx my-run      # write my-run/model.onnx + model.json
 ```
 
-The shipped binary targets a portable CPU baseline. If you're building only
-for your own machine, a native-tuned build lets the CPU backend use your
-processor's SIMD (AVX2/AVX-512):
+The shipped binary targets a portable CPU baseline. For a build tuned to your
+own machine:
 
 ```sh
 RUSTFLAGS="-C target-cpu=native" cargo build --release   # local builds only, not portable
 ```
 
-### CPU or GPU
+## What it trains
 
-Set `[train] device` in `train.toml`:
-
-| value | backend |
-|---|---|
-| `auto` (default) | ndarray CPU backend, fastest for the small models this engine trains |
-| `cpu` | ndarray CPU backend |
-| `gpu` / `cuda` / `wgpu` | GPU via wgpu (warns and falls back to CPU if none) |
-
-`auto` trains on **CPU** on purpose: for the model sizes this engine builds
-(small MLPs and a 2-conv CNN) the ndarray backend beats wgpu, whose
-per-process init + adapter probe + kernel autotune (seconds) dwarfs the
-actual training. The GPU is **opt-in**: set `device = "gpu"`, where it pays
-off only on larger workloads.
-
-The GPU path uses burn's **wgpu** backend (Vulkan/DX12/Metal/OpenGL), with no
-CUDA or vendor toolchain required, so the same binary uses the GPU on any
-modern machine. GPU runs emit a per-epoch `mem/gpu_mb` footprint metric.
-
-### The model (declarative)
-
-The model is described in `train.toml`, not code, and is chosen by what `[data]
-path` points at:
+The model is described in `train.toml`, not code, and is chosen by what
+`[data] path` points at:
 
 | `[data] path` | model | `[model]` keys |
 |---|---|---|
-| a `.csv` (or unset → synthetic) | tabular **MLP** | `hidden = 16` or `hidden = [64, 32]` |
+| a `.csv` (or unset → synthetic data) | tabular **MLP** | `hidden = 16` or `hidden = [64, 32]` |
 | a folder of class sub-folders | image **CNN** | `conv1`, `conv2`, `hidden` |
 
-`hidden` as a list sets the MLP's hidden-layer widths (any depth; an empty
-list is a bare linear classifier). The CNN decodes folder-per-class images to
-grayscale (PNG/JPEG/BMP, resized to the first image's size) and emits a
-per-epoch confusion matrix plus an `image-grid` PNG of sample predictions.
+### Spreadsheets (CSV)
 
-### ONNX export
+```toml
+[data]
+path = "data.csv"
+target = "price"        # the column to predict
+task = "auto"           # auto | classification | regression
+categorical = ["zip"]   # numeric-looking columns that are really categories
+ignore = ["id"]         # columns to leave out
 
-`nexis-ml export --onnx [dir]` trains the tabular MLP from `train.toml` and
-writes `<dir>/model.onnx`, a portable model for `ort`/onnxruntime inference
-without Python. Standardization is baked into the graph, so it takes **raw
-features** (input name `input`) and returns class logits (`output`). burn has
-no native ONNX export, so the protobuf is hand-encoded (no extra dependency);
-the export is verified against onnxruntime for an exact prediction match.
-(CNN/image ONNX export is a follow-up.)
-
-The binary is named `nexis-ml` (not `nexis-ml-rs`) so Nexis detects and
-spawns it exactly like the Python engine; the two are never on `PATH`
-together; this one is downloaded to its own directory.
-
-## Compatibility
-
-A run produced here is indistinguishable to Nexis from a Python-engine run:
-
-```sh
-nexis-ml train demo                 # Rust engine writes the run
-python -m nexis_ml.cli runs demo    # Python engine lists it ✓
+[train]
+class_weights = "auto"  # classification: auto | balanced | none
 ```
 
-Same `protocol` version (1), same `metric`/`epoch`/`artifact`/
-`run.finished` events, same `config.json` / `metrics.jsonl` /
-`summary.json` / `artifacts/` layout.
+- **Predict a category or a number.** `task = "auto"` picks *classification*
+  for a text target or a handful of integer ids, and *regression* for any
+  other numeric target. Regression trains on a standardized target and
+  reports `mae/val`, `rmse/val` and `r2/val` in the target's own units, plus
+  a per-epoch `residuals` artifact (actual vs predicted).
+- **Text columns become categories.** A column with up to 50 distinct text
+  values is one-hot encoded. Columns with more (IDs, free text) are left out
+  and named in the run log.
+- **Missing values are handled.** Blank, `NA`, `N/A`, `NaN`, `null`, `none`,
+  `?` and `-` all count as missing. A missing number takes the training mean
+  and sets a `<col> missing` input; a missing category is its own category.
+  Rows with no target value are skipped.
+- **Imbalanced classes are weighted.** With `class_weights = "auto"`, when the
+  largest class is at least 3× the smallest, rarer classes count for more in
+  the loss. Validation loss stays unweighted so runs remain comparable.
+- **Real CSV parsing.** Quoted fields, embedded commas and newlines, CRLF,
+  and a UTF-8 BOM.
 
-In protocol mode the engine also honors the same stdin **control commands**
-as the Python harness: `{"cmd":"cancel"}` (stop gracefully and finish as
-`cancelled`, keeping the last checkpoint), `{"cmd":"pause"}` /
-`{"cmd":"resume"}` (block/release at the next epoch boundary), so Nexis's
-Stop and Pause buttons work against either engine.
+The encoding is fitted on the training split only and saved in the
+checkpoint, so `serve` and `export` encode a row exactly the way training
+did.
+
+### Images
+
+The CNN decodes folder-per-class images to grayscale (PNG/JPEG/BMP, resized
+to the first image's size) and emits a per-epoch confusion matrix plus an
+`image-grid` PNG of sample predictions. `axon new image` ships four example
+pattern classes so it trains out of the box.
+
+## CPU or GPU
+
+Set `[train] device`:
+
+| value | backend |
+|---|---|
+| `auto` (default) | ndarray CPU, fastest for the small models Axon builds |
+| `cpu` | ndarray CPU |
+| `gpu` / `cuda` / `wgpu` | GPU via wgpu (warns and falls back to CPU if none) |
+
+`auto` trains on the CPU on purpose: wgpu's per-process init and kernel
+autotune take seconds, which dwarfs training at these sizes. GPU runs emit a
+per-epoch `mem/gpu_mb` metric.
+
+## Serving
+
+`axon serve --run <id> [dir]` emits one `ready` event, then answers one JSON
+request per stdin line:
+
+```text
+→ {"input": {"sqft": 2000, "rooms": 3, "city": "Oslo"}}
+← {"ev":"prediction","input":{…},"output":{"value":372471.7}}                    # regression
+← {"ev":"prediction","input":{…},"output":{"label":"yes","probs":{"no":0.01,"yes":0.99}}}  # classification
+```
+
+`ready.meta` lists the input `columns`, each with its `kind` and, for a
+categorical column, its `categories`, so a UI can offer a dropdown. Values
+may be numbers or strings; anything left out is treated as missing. Serving
+is a plain forward pass over the saved weights, so it starts instantly.
+
+## ONNX export
+
+`axon export --onnx [--run <id>] [dir]` writes the run's model (default: the
+newest trained run) to `<dir>/model.onnx`, plus `<dir>/model.json`
+describing the input slots. It exports the trained weights; it doesn't
+retrain. The graph takes the encoded row as `input`: numbers as raw values,
+categories one-hot. Standardization is inside the graph. For classification
+the output is the class logits; for regression it is the value in the
+target's units. The protobuf is hand-encoded (burn has no ONNX export), and
+the output matches onnxruntime exactly. CNN export is a follow-up.
+
+## Protocol and run store
+
+Axon writes runs to `<project>/.nexis-ml/runs/<run-id>/` (`config.json`,
+`metrics.jsonl`, `summary.json`, `checkpoints/`, `artifacts/`). The directory
+name predates the rename and is kept so existing projects keep their history.
+With `--nexis-protocol`, stdout carries protocol v1 events (`run.started`,
+`metric`, `epoch`, `artifact`, `log`, `run.finished`), and stdin accepts
+`{"cmd":"cancel"|"pause"|"resume"}`.
 
 ## Layout
 
 | File | Role |
 |---|---|
 | `src/protocol.rs` | NDJSON emitter (protocol v1) |
-| `src/run_store.rs` | run directory + atomic file writes (UTC stamp, no deps) |
+| `src/run_store.rs` | run directory + atomic file writes |
 | `src/harness.rs` | `Run` lifecycle + stdin control watcher (cancel/pause/resume) |
-| `src/model.rs` | the `train` command's `burn` MLP + CNN (CPU/GPU), device selection, CSV/synthetic + image data |
-| `src/onnx.rs` | dependency-free ONNX writer for the tabular MLP (`export --onnx`) |
-| `src/serve.rs` | `serve` inference loop (burn-free forward pass over the saved weights) |
-| `src/main.rs` | CLI (`--version` / `env` / `new` / `train` / `export` / `serve`) |
+| `src/tabular.rs` | CSV parsing, column typing, task detection, the fitted input `Schema` |
+| `src/model.rs` | `train`: the burn MLP and CNN, device selection, data prep, `export` |
+| `src/checkpoint.rs` | loading a trained tabular model back (serve/export), forward pass |
+| `src/onnx.rs` | dependency-free ONNX writer for the MLP |
+| `src/serve.rs` | `serve` inference loop |
+| `src/main.rs` | CLI |
 
 ## License
 

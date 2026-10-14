@@ -1,17 +1,16 @@
 [package]
-name = "nexis-ml-rs"
-version = "0.8.0"
+name = "axon"
+version = "0.9.0"
 edition = "2021"
-description = "Python-free, single-binary ML engine for the Nexis terminal (Phase 3) — same NDJSON protocol and run store as nexis-ml."
+description = "Axon — a single-binary ML engine (tabular MLPs and small CNNs, CPU or wgpu GPU) for the Nexis terminal's Synapse lab."
 license = "Apache-2.0"
 authors = ["Ryan Wetzstein"]
-repository = "https://github.com/rwetz/nexis-ml-rs"
+repository = "https://github.com/rwetz/axon"
 
-# The binary is named `nexis-ml` so Nexis detects/spawns it exactly like
-# the Python engine (it matches on the file stem "nexis-ml"); the two are
-# never on PATH together — this one is downloaded to its own dir.
+# Nexis only spawns a binary whose file stem is exactly `axon` (or the
+# legacy `nexis-ml`) and whose `--version` starts with that name.
 [[bin]]
-name = "nexis-ml"
+name = "axon"
 path = "src/main.rs"
 
 [dependencies]

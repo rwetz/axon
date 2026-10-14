@@ -1,15 +1,16 @@
 // ╔══════════════════════════════════════╗
 // ║  Ryan Wetzstein                      ║
-// ║  Nexis ML (Rust)                     ║
+// ║  Axon                                ║
 // ║  2026                                ║
 // ╚══════════════════════════════════════╝
 
 //! A tiny, dependency-free ONNX writer for the tabular MLP — burn has no
 //! native ONNX export, so we hand-encode the protobuf (proto3 wire format)
 //! for a `Gemm`/`Relu` graph. Standardization is baked in as leading
-//! `Sub`/`Div` nodes so the exported model takes raw features and returns
-//! class logits — a door-opener for `ort`/onnxruntime inference without
-//! Python. Verified against onnxruntime (see PLAN.md M5).
+//! `Sub`/`Div` nodes so the exported model takes the schema's raw encoded
+//! row and returns class logits — or, for regression, trailing `Mul`/`Add`
+//! nodes return the value in the target's own units. Verified against
+//! onnxruntime (see PLAN.md M5).
 //!
 //! Only what ONNX needs is implemented: varint + length-delimited fields and
 //! the handful of message types in the graph. CNN export is a follow-up.
@@ -50,15 +51,15 @@ fn f_str(out: &mut Vec<u8>, field: u32, s: &str) {
 
 // ── ONNX message builders ─────────────────────────────────────────────
 
-/// A trained dense layer's weights, exactly as burn stored them (the shape
-/// may be `[in, out]` or `[out, in]` depending on the Linear layout; the
-/// Gemm `transB` attribute is set from it so orientation is handled).
+/// A trained dense layer: row-major `weight` of shape `[w_rows, w_cols]`.
+/// `trans_b` says it is stored `[out, in]` (Gemm `transB`). It is explicit
+/// because a square layer can't be told apart by shape.
 pub struct Dense {
     pub weight: Vec<f32>,
     pub w_rows: usize,
     pub w_cols: usize,
+    pub trans_b: bool,
     pub bias: Vec<f32>,
-    pub in_dim: usize,
     pub out_dim: usize,
 }
 
@@ -138,14 +139,16 @@ fn value_info_2d(name: &str, features: i64) -> Vec<u8> {
 }
 
 /// Build a complete ONNX ModelProto for `raw input → standardize →
-/// (Gemm[, Relu])* → logits` and return its bytes.
+/// (Gemm[, Relu])* → logits` (or `→ · std + mean` for regression, when
+/// `rescale` is `Some((mean, std))`) and return its bytes.
 fn build_model(
     features: usize,
     mean: &[f32],
     std: &[f32],
     layers: &[Dense],
-    classes: usize,
+    rescale: Option<(f32, f32)>,
 ) -> Vec<u8> {
+    let outputs = layers.last().map_or(0, |l| l.out_dim);
     let mut nodes: Vec<Vec<u8>> = Vec::new();
     let mut inits: Vec<Vec<u8>> = Vec::new();
 
@@ -179,9 +182,8 @@ fn build_model(
             &layer.weight,
         ));
         inits.push(tensor_proto(&b_name, &[layer.out_dim as i64], &layer.bias));
-        // transB=1 when the weight is stored [out, in] rather than [in, out].
-        let trans_b = i64::from((layer.w_rows, layer.w_cols) == (layer.out_dim, layer.in_dim));
-        let gemm_out = if last {
+        let trans_b = i64::from(layer.trans_b);
+        let gemm_out = if last && rescale.is_none() {
             "output".to_string()
         } else {
             format!("g{i}")
@@ -203,7 +205,29 @@ fn build_model(
                 &[],
             ));
             prev = relu_out;
+        } else {
+            prev = gemm_out;
         }
+    }
+
+    // Regression: standardized prediction → the target's own units.
+    if let Some((y_mean, y_std)) = rescale {
+        inits.push(tensor_proto("y_std", &[1], &[y_std]));
+        inits.push(tensor_proto("y_mean", &[1], &[y_mean]));
+        nodes.push(node(
+            "Mul",
+            "unscale_mul",
+            &[&prev, "y_std"],
+            &["y_scaled"],
+            &[],
+        ));
+        nodes.push(node(
+            "Add",
+            "unscale_add",
+            &["y_scaled", "y_mean"],
+            &["output"],
+            &[],
+        ));
     }
 
     // GraphProto: node (1), name (2), initializer (5), input (11), output (12).
@@ -211,12 +235,12 @@ fn build_model(
     for n in &nodes {
         f_bytes(&mut graph, 1, n);
     }
-    f_str(&mut graph, 2, "nexis_mlp");
+    f_str(&mut graph, 2, "axon_mlp");
     for init in &inits {
         f_bytes(&mut graph, 5, init);
     }
     f_bytes(&mut graph, 11, &value_info_2d("input", features as i64));
-    f_bytes(&mut graph, 12, &value_info_2d("output", classes as i64));
+    f_bytes(&mut graph, 12, &value_info_2d("output", outputs as i64));
 
     // OperatorSetIdProto: version (2) — default ai.onnx domain.
     let mut opset = Vec::new();
@@ -225,24 +249,25 @@ fn build_model(
     // ModelProto: ir_version (1), producer_name (2), opset_import (8), graph (7).
     let mut model = Vec::new();
     f_varint(&mut model, 1, 7); // IR version 7 (ONNX 1.8)
-    f_str(&mut model, 2, "nexis-ml-rs");
+    f_str(&mut model, 2, "axon");
     f_bytes(&mut model, 8, &opset);
     f_bytes(&mut model, 7, &graph);
     model
 }
 
-/// Write an MLP to `path` as ONNX. The graph takes raw features (named
-/// "input") and returns class logits (named "output"); standardization is
-/// baked in. Atomic write (tmp + rename), like the run store.
+/// Write an MLP to `path` as ONNX. The graph takes the encoded row (named
+/// "input") and returns logits or the regression value (named "output");
+/// standardization is baked in. Atomic write (tmp + rename), like the run
+/// store.
 pub fn write_mlp(
     path: &Path,
     features: usize,
     mean: &[f32],
     std: &[f32],
     layers: &[Dense],
-    classes: usize,
+    rescale: Option<(f32, f32)>,
 ) -> std::io::Result<()> {
-    let bytes = build_model(features, mean, std, layers, classes);
+    let bytes = build_model(features, mean, std, layers, rescale);
     let tmp = path.with_extension("onnx.tmp");
     {
         let mut f = std::fs::File::create(&tmp)?;
@@ -276,11 +301,13 @@ mod tests {
             weight: vec![0.0; 2 * 2],
             w_rows: 2,
             w_cols: 2,
+            trans_b: false,
             bias: vec![0.0; 2],
-            in_dim: 2,
             out_dim: 2,
         }];
-        let bytes = build_model(2, &[0.0, 0.0], &[1.0, 1.0], &layers, 2);
+        let bytes = build_model(2, &[0.0, 0.0], &[1.0, 1.0], &layers, None);
         assert!(bytes.len() > 32);
+        let reg = build_model(2, &[0.0, 0.0], &[1.0, 1.0], &layers, Some((5.0, 2.0)));
+        assert!(reg.len() > bytes.len());
     }
 }

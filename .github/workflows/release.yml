@@ -1,11 +1,12 @@
 # Builds the standalone engine for Windows / macOS / Linux and attaches the
 # binaries to the GitHub Release when a `v*` tag is pushed.
 #
-# The Nexis ML Lab panel's "Download standalone engine" button fetches
-# `releases/latest/download/<asset>`, so the asset names below MUST match
-# `ml_engine_release_url` in the Nexis app:
-#   windows x64 → nexis-ml-windows-x64.exe
-#   linux x64   → nexis-ml-linux-x64
+# Nexis pins each asset by tag + SHA-256 (`engine_asset` in
+# src-tauri/src/modules/ml.rs), so the asset names below MUST match it:
+#   windows x64 → axon-windows-x64.exe
+#   linux x64   → axon-linux-x64
+# Each job also uploads `<asset>.sha256` so a new pin can be checked against
+# CI's own hash instead of a local download.
 # (macOS builds are deferred — see the matrix note below.)
 name: release
 
@@ -38,14 +39,14 @@ jobs:
       matrix:
         include:
           - os: windows-latest
-            bin: nexis-ml.exe
-            asset: nexis-ml-windows-x64.exe
+            bin: axon.exe
+            asset: axon-windows-x64.exe
           - os: ubuntu-latest
-            bin: nexis-ml
-            asset: nexis-ml-linux-x64
+            bin: axon
+            asset: axon-linux-x64
           # macOS builds deferred — the macos-13 (Intel) runner queued for
           # hours and left releases hanging. Revisit later (likely a single
-          # arm64 runner cross-compiling x64). Mac users use the Python engine.
+          # arm64 runner cross-compiling x64).
     runs-on: ${{ matrix.os }}
     name: ${{ matrix.asset }}
     steps:
@@ -56,9 +57,11 @@ jobs:
         run: cargo build --release --locked
       - name: Stage asset
         shell: bash
-        run: cp "target/release/${{ matrix.bin }}" "${{ matrix.asset }}"
+        run: |
+          cp "target/release/${{ matrix.bin }}" "${{ matrix.asset }}"
+          sha256sum "${{ matrix.asset }}" > "${{ matrix.asset }}.sha256"
       - name: Upload to release
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release upload "${{ github.ref_name }}" "${{ matrix.asset }}" --clobber
+        run: gh release upload "${{ github.ref_name }}" "${{ matrix.asset }}" "${{ matrix.asset }}.sha256" --clobber

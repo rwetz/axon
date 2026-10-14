@@ -1,8 +1,9 @@
-# nexis-ml-rs — plan
+# Axon — plan
 
-Phase 3 of the Nexis ML Suite: a downloadable, Python-free engine that
-implements the same protocol as the Python `nexis-ml`. Build only as far
-as real usage justifies (the spec gates Phase 3 on Phase 1/2 adoption).
+Axon (named nexis-ml-rs through v0.8) began as Phase 3 of the Nexis ML
+Suite: a downloadable, Python-free engine implementing the same protocol as
+the Python `nexis-ml`. The Python engine is now phased out and Axon is the
+engine Nexis supports. Milestones M1–M7 below keep their original names.
 
 ## Milestones
 
@@ -97,6 +98,25 @@ mirroring how an LSP server is fetched. **Download hookup shipped**
 (`ml_engine_release_url`) and the setup card has a one-click "Download
 standalone engine" button that fetches, verifies, and then runs this engine.
 **Phase 3 (M1–M6) is complete.**
+
+### M7 — `serve` ✅ (2026-07-02, v0.8.0)
+Tabular inference loop for the Playground and chat tools; `train` persists
+the MLP's weights. See CHANGELOG.
+
+### M8 — real-world spreadsheets + rename to Axon ✅ (2026-10-14, v0.9.0)
+Regression (`[data] task`), categorical columns (one-hot), missing values
+(mean + missing flag / `(missing)` category), class balancing, RFC 4180 CSV
+parsing. The fitted input schema rides in the checkpoint so `serve` and
+`export` encode rows exactly as training did; `export` now exports a trained
+run instead of retraining. Fixed square-layer weight orientation.
+
+### Next
+- Text generation (a small transformer in burn), so the Synapse text
+  template works without Python.
+- Image models in `serve` and CNN ONNX export.
+- Evaluation: per-class precision/recall, permutation feature importance, a
+  held-out test split.
+- macOS release builds.
 
 ## Non-goals (carried from ML_SUITE.md)
 No cloud, no distributed training, no model zoo. Small models, small data,

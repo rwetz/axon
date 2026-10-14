@@ -1,6 +1,6 @@
 // ╔══════════════════════════════════════╗
 // ║  Ryan Wetzstein                      ║
-// ║  Nexis ML (Rust)                     ║
+// ║  Axon                                ║
 // ║  2026                                ║
 // ╚══════════════════════════════════════╝
 
@@ -60,7 +60,7 @@ impl Control {
 /// EOF (Nexis closing the pipe) it simply ends.
 fn start_stdin_watcher(control: Arc<Control>) {
     let _ = std::thread::Builder::new()
-        .name("nexis-ml-stdin-watcher".into())
+        .name("axon-stdin-watcher".into())
         .spawn(move || {
             let stdin = std::io::stdin();
             let mut lock = stdin.lock();

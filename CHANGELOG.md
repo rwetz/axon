@@ -1,10 +1,48 @@
 # Changelog
 
-All notable changes to nexis-ml-rs (the Rust engine). Versions follow
+All notable changes to Axon (named nexis-ml-rs up to v0.8). Versions follow
 [SemVer](https://semver.org/); pre-1.0, minor bumps may change the CLI.
-This engine speaks the same protocol and writes the same run store as the
-Python [`nexis-ml`](https://github.com/rwetz/nexis-ml) — see
-[PLAN.md](PLAN.md) for the milestone-by-milestone story.
+See [PLAN.md](PLAN.md) for the milestone-by-milestone story.
+
+## [0.9.0] — 2026-10-14 — Axon: real-world spreadsheets
+
+### Changed
+- **Renamed to Axon.** The binary is `axon`, `--version` prints `axon 0.9.0`,
+  `env` reports `"engine": "axon"`, and release assets are
+  `axon-windows-x64.exe` / `axon-linux-x64`. The run-store directory stays
+  `.nexis-ml/` so existing projects keep their history.
+- **`export --onnx` exports a trained run** (`--run <id>`, default the newest)
+  instead of retraining from `train.toml`, so the exported model is the one
+  the run browser shows. It also writes `model.json` describing the input
+  slots.
+- **A malformed `train.toml` is an error.** It used to fall back to defaults
+  silently.
+
+### Added
+- **Regression.** `[data] task = "auto" | "classification" | "regression"`;
+  `auto` reads a numeric target as a number unless it is a handful of integer
+  ids. Regression logs `mae/val`, `rmse/val`, `r2/val` and a per-epoch
+  `residuals` artifact (`{"target","actual","predicted"}`); `serve` answers
+  `{"value": …}`; ONNX output is in the target's units.
+- **Categorical columns.** Text columns with up to 50 distinct values are
+  one-hot encoded; more than that (IDs, free text) are left out and named in
+  the log. `[data] categorical = [...]` and `[data] ignore = [...]` override.
+- **Missing values.** Blank/`NA`/`NaN`/`null`/`?`/… are missing: numbers take
+  the training mean plus a `<col> missing` input; categories get a
+  `(missing)` category; rows with no target are skipped.
+- **Class balancing.** `[train] class_weights = "auto" | "balanced" | "none"`;
+  `auto` weights rare classes up when the largest class is 3× the smallest.
+- **RFC 4180 CSV parsing** (quotes, embedded commas/newlines, CRLF, BOM).
+- **Richer `serve` ready meta:** `columns` (kind + categories), `target`, and
+  the real `task`. `env` adds `"tasks"` and `"categorical"` capability flags.
+- The checkpoint carries the fitted input schema (`best.json` → `schema`).
+  v0.8 checkpoints still load as all-numeric classifiers.
+
+### Fixed
+- A square hidden layer (e.g. `hidden = [16, 16]`) was transposed in the
+  saved weights and the ONNX graph. Burn stores `Linear` weights `[in, out]`,
+  and a square shape matched the `[out, in]` check. Weight orientation is now
+  explicit.
 
 ## [0.8.0] — 2026-07-02 — serve: the Playground works without Python
 
