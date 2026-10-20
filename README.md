@@ -20,9 +20,9 @@ line-oriented NDJSON protocol; Axon also works on its own from any terminal.
 ```sh
 cargo build --release          # produces target/release/axon(.exe)
 
-axon --version                 # → "axon 0.9.0"
+axon --version                 # → "axon 0.11.0"
 axon env                       # one-line JSON capability report
-axon new tabular my-run        # scaffold a project (templates: tabular | image)
+axon new tabular my-run        # scaffold a project (templates: tabular | image | text)
 axon train my-run              # train; writes my-run/.nexis-ml/runs/<id>/
 axon --nexis-protocol train my-run   # stream NDJSON events on stdout
 axon serve --run <id> my-run   # inference loop: one JSON request per stdin line
@@ -44,7 +44,9 @@ The model is described in `train.toml`, not code, and is chosen by what
 | `[data] path` | model | `[model]` keys |
 |---|---|---|
 | a `.csv` (or unset → synthetic data) | tabular **MLP** | `hidden = 16` or `hidden = [64, 32]` |
+| a `.csv`, with `[model] kind = "gbdt"` | **gradient-boosted trees** | `[gbdt]` `trees`, `max_depth`, `learning_rate`, `min_leaf`, `l2`, `max_bins` |
 | a folder of class sub-folders | image **CNN** | `conv1`, `conv2`, `hidden` |
+| a `.txt` file | character-level **GPT** | `[gpt]` `d_model`, `n_layers`, `n_heads`, `context_len` |
 
 ### Spreadsheets (CSV)
 
@@ -82,6 +84,50 @@ The encoding is fitted on the training split only and saved in the
 checkpoint, so `serve` and `export` encode a row exactly the way training
 did.
 
+### Gradient-boosted trees
+
+`[model] kind = "gbdt"` trains a small histogram booster (second-order
+gradients, L2-regularized leaves, no dependencies) on the same encoded rows as
+the MLP. Progress is reported in "epochs" of a few rounds each, so the loss
+curve, confusion matrix and residuals work unchanged. The best ensemble by
+validation loss is saved and served by `serve`. Trees train on the CPU, and
+ONNX export is not available for them yet.
+
+```toml
+[model]
+kind = "gbdt"
+
+[gbdt]
+trees = 100
+max_depth = 4
+learning_rate = 0.1
+```
+
+### Text
+
+`[data] path` pointing at a `.txt` file trains a small decoder-only
+transformer over characters: token and learned positional embeddings, pre-norm
+blocks of causal multi-head attention and a GELU MLP, a final LayerNorm and a
+weight-tied head (the nanoGPT shape, and the same model as BibleLM's).
+`axon new text` ships a few public-domain chapters so it trains at once.
+
+```toml
+[data]
+path = "data/corpus.txt"
+
+[gpt]
+d_model = 256
+n_layers = 4
+n_heads = 4
+context_len = 256
+steps_per_epoch = 200   # optimizer steps per reported epoch
+```
+
+Each epoch logs `loss/train`, `loss/val` and `tokens/sec` and writes a short
+generated `text` artifact, so you can watch it learn to write. The best
+weights by validation loss are saved as `checkpoints/best-gpt.bin` (raw f32)
+with `best.json`. A GPU (`device = "gpu"`) makes a large difference here.
+
 ### Images
 
 The CNN decodes folder-per-class images to grayscale (PNG/JPEG/BMP, resized
@@ -118,6 +164,14 @@ request per stdin line:
 categorical column, its `categories`, so a UI can offer a dropdown. Values
 may be numbers or strings; anything left out is treated as missing. Serving
 is a plain forward pass over the saved weights, so it starts instantly.
+
+A text run streams characters instead:
+
+```text
+→ {"prompt": "In the beginning", "max_tokens": 200, "temperature": 0.8, "top_k": 40}
+← {"ev":"token","text":" "}  … one per character …
+← {"ev":"generation","prompt":"In the beginning","text":" God created …"}
+```
 
 ## ONNX export
 

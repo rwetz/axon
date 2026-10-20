@@ -8,7 +8,8 @@
 //! and generic over the backend (`[train] device` picks CPU/ndarray or
 //! GPU/wgpu, both with autodiff). The model is chosen from `[data] path`: a
 //! folder of class sub-folders trains a **CNN** over its images; a CSV (or
-//! no path → synthetic) trains a declarative-depth **MLP** over tabular rows.
+//! no path → synthetic) trains a declarative-depth **MLP** over tabular rows;
+//! a `.txt` file trains a small character-level **GPT** (see `text.rs`).
 //! Both are configured in `train.toml` (`[model] hidden = 16 | [64, 32]` for
 //! the MLP; `conv1`/`conv2`/`hidden` for the CNN).
 //!
@@ -36,10 +37,12 @@ use burn::tensor::{
 use serde::Deserialize;
 use serde_json::json;
 
+use crate::gbdt::{self, Booster, GbdtCfg, Labels};
 use crate::harness::Run;
 use crate::protocol::Emitter;
 use crate::run_store;
 use crate::tabular::{self, err, ColumnPrefs, Raw, Schema, Table, Task};
+use crate::text::run_text_training;
 
 /// The engine name recorded in run configs and the ONNX producer field.
 pub const ENGINE_NAME: &str = "axon";
@@ -126,6 +129,8 @@ impl HiddenSpec {
 #[derive(Deserialize)]
 #[serde(default)]
 struct ModelCfg {
+    /// Tabular only: `mlp` (a neural net) or `gbdt` (gradient-boosted trees).
+    kind: String,
     hidden: HiddenSpec,
     conv1: usize, // CNN: first conv channel count (image data)
     conv2: usize, // CNN: second conv channel count
@@ -133,6 +138,7 @@ struct ModelCfg {
 impl Default for ModelCfg {
     fn default() -> Self {
         Self {
+            kind: "mlp".into(),
             hidden: HiddenSpec::default(),
             conv1: 16,
             conv2: 32,
@@ -148,6 +154,8 @@ struct Root {
     data: DataCfg,
     #[serde(default)]
     model: ModelCfg,
+    #[serde(default)]
+    gbdt: GbdtCfg,
 }
 
 /// Parse train.toml. A missing file means defaults; a malformed one is an
@@ -679,8 +687,35 @@ pub fn train(project: &Path, emitter: &Emitter) -> std::io::Result<i32> {
             )));
         }
     }
+    // A plain-text file trains the text model (a small GPT over characters).
+    if let Some(p) = root.data.path.as_deref().filter(|p| p.to_ascii_lowercase().ends_with(".txt")) {
+        let text = project.join(p);
+        let want = want_gpu(&root.train.device, emitter);
+        return dispatch_backend!(run_text_training, want, project, emitter, &root.train, &text);
+    }
+    let trees = match root.model.kind.trim().to_ascii_lowercase().as_str() {
+        "" | "mlp" => false,
+        "gbdt" | "trees" | "boosted-trees" => true,
+        other => {
+            return Err(err(format!(
+                "[model] kind \"{other}\" — expected mlp or gbdt"
+            )))
+        }
+    };
+    let images = image_dir(project, &root);
+    if trees {
+        if images.is_some() {
+            return Err(err(
+                "[model] kind = \"gbdt\" works on spreadsheets only — image data                  trains a CNN, so remove kind or set it to mlp"
+                    .into(),
+            ));
+        }
+        // Trees train on the CPU; no backend dispatch needed.
+        let data = prepare(project, &root)?;
+        return run_gbdt(project, emitter, &root, data);
+    }
     let want = want_gpu(&root.train.device, emitter);
-    match image_dir(project, &root) {
+    match images {
         Some(dir) => {
             let data = prepare_images(&dir, &root.train)?;
             dispatch_backend!(run_cnn_training, want, project, emitter, &root, data)
@@ -929,6 +964,197 @@ fn run_training<B: AutodiffBackend>(
     }
 
     run.info(&format!("best val loss: {best_val:.4}"));
+    let status = if run.cancelled() { "cancelled" } else { "ok" };
+    run.finish(status);
+    Ok(0)
+}
+
+// ── gradient-boosted trees ────────────────────────────────────────────
+
+/// Aim for about this many progress reports per run, however many trees.
+const GBDT_REPORTS: usize = 40;
+
+/// Train `[model] kind = "gbdt"`: boost on the CPU, reporting every few
+/// rounds as an "epoch" so the panel's curves, confusion matrix and
+/// residuals work unchanged. The best-by-validation ensemble is saved.
+fn run_gbdt(
+    project: &Path,
+    emitter: &Emitter,
+    root: &Root,
+    data: Prepared,
+) -> std::io::Result<i32> {
+    let cfg = &root.train;
+    let gcfg = root.gbdt.clone();
+    let n_in = data.schema.width();
+    let total = gcfg.trees.max(1);
+    let step = total.div_ceil(GBDT_REPORTS);
+    let reports = total.div_ceil(step) as u32;
+
+    let dir = run_store::new_run_dir(project, "tabular")?;
+    let config_json = json!({
+        "train": {
+            "val_split": cfg.val_split, "seed": cfg.seed,
+            "class_weights": cfg.class_weights,
+        },
+        "model": {"kind": "gbdt"},
+        "gbdt": {
+            "trees": gcfg.trees, "max_depth": gcfg.max_depth,
+            "learning_rate": gcfg.learning_rate, "min_leaf": gcfg.min_leaf,
+            "l2": gcfg.l2, "max_bins": gcfg.max_bins,
+        },
+        "engine": ENGINE_NAME,
+        "derived": {
+            "task": data.task.as_str(),
+            "target": data.target,
+            "classes": data.classes,
+            "features": data.schema.input_names(),
+            "inputs": n_in,
+        },
+    });
+    let mut run = Run::start(emitter, dir, "tabular", config_json, reports, "cpu");
+    let what = match data.task {
+        Task::Classification => format!("{} classes", data.classes.len()),
+        Task::Regression => format!("predicting '{}' (a number)", data.target),
+    };
+    run.info(&format!(
+        "Boosted trees (cpu): {} train / {} val rows, {}, {what}, {} trees of depth {}",
+        data.train_x.len(),
+        data.val_x.len(),
+        data.schema.describe(),
+        gcfg.trees,
+        gcfg.max_depth,
+    ));
+    for note in &data.notes {
+        run.info(note);
+    }
+
+    let labels = match &data.train_t {
+        Targets::Class(y) => Labels::Class(y, data.classes.len(), data.class_weights.as_deref()),
+        Targets::Value(y) => Labels::Value(y),
+    };
+    // Validation loss is unweighted, as for the MLP, so runs compare.
+    let val_labels = match &data.val_t {
+        Targets::Class(y) => Labels::Class(y, data.classes.len(), None),
+        Targets::Value(y) => Labels::Value(y),
+    };
+    let val_actual: Vec<f32> = match &data.val_t {
+        Targets::Value(v) => v.iter().map(|z| z * data.y_std + data.y_mean).collect(),
+        Targets::Class(_) => Vec::new(),
+    };
+
+    let mut booster = Booster::new(&data.train_x, n_in, labels, gcfg.clone());
+    let mut val_raw: Vec<Vec<f32>> = vec![booster.ensemble.base.clone(); data.val_x.len()];
+    let mut best_val = f64::INFINITY;
+    let mut best_rounds = 0usize;
+    let mut done = 0usize;
+
+    for epoch in 1..=reports {
+        let until = (done + step).min(total);
+        while done < until {
+            booster.round();
+            let trees = booster.ensemble.rounds.last().expect("just grown");
+            for (z, row) in val_raw.iter_mut().zip(&data.val_x) {
+                for (k, tree) in trees.iter().enumerate() {
+                    z[k] += gbdt::walk(tree, row);
+                }
+            }
+            done += 1;
+        }
+        if run.cancelled() {
+            break;
+        }
+
+        let tloss = booster.train_loss();
+        let vloss = gbdt::loss(&val_raw, &val_labels);
+        match &data.val_t {
+            Targets::Class(val_y) => {
+                let preds: Vec<i64> = val_raw
+                    .iter()
+                    .map(|z| {
+                        z.iter()
+                            .enumerate()
+                            .max_by(|a, b| a.1.total_cmp(b.1))
+                            .map_or(0, |(i, _)| i as i64)
+                    })
+                    .collect();
+                let (cm, correct) = confusion(&preds, val_y, data.classes.len());
+                let acc = correct as f64 / val_y.len().max(1) as f64;
+                run.log(
+                    &[("loss/train", tloss), ("loss/val", vloss), ("acc/val", acc)],
+                    epoch,
+                );
+                write_cm_artifact(&mut run, epoch, &data.classes, &cm);
+            }
+            Targets::Value(_) => {
+                let predicted: Vec<f32> = val_raw
+                    .iter()
+                    .map(|z| z[0] * data.y_std + data.y_mean)
+                    .collect();
+                let (mae, rmse, r2) = regression_metrics(&predicted, &val_actual);
+                run.log(
+                    &[
+                        ("loss/train", tloss),
+                        ("loss/val", vloss),
+                        ("mae/val", mae),
+                        ("rmse/val", rmse),
+                        ("r2/val", r2),
+                    ],
+                    epoch,
+                );
+                write_residuals_artifact(&mut run, epoch, &data.target, &val_actual, &predicted);
+            }
+        }
+
+        if vloss < best_val {
+            best_val = vloss;
+            best_rounds = done;
+            let ckpt = json!({
+                "kind": "gbdt",
+                "task": data.task.as_str(),
+                "target": data.target,
+                "classes": data.classes,
+                "schema": data.schema,
+                "features": data.schema.encoded_names(),
+                "y_mean": data.y_mean, "y_std": data.y_std,
+                "rounds": done,
+            });
+            let _ = fs::write(
+                run.checkpoints_dir().join("best.json"),
+                serde_json::to_string_pretty(&ckpt).unwrap_or_default(),
+            );
+            let _ = fs::write(
+                run.checkpoints_dir().join("best-trees.json"),
+                serde_json::to_string(&booster.ensemble).unwrap_or_default(),
+            );
+        }
+
+        run.epoch(epoch); // honors a pause request at the boundary
+        if run.cancelled() || done >= total {
+            break;
+        }
+    }
+
+    // Which inputs the trees lean on most, by split count.
+    let names = data.schema.encoded_names();
+    let mut used: Vec<(u32, &String)> = booster
+        .ensemble
+        .split_counts(n_in)
+        .into_iter()
+        .zip(names.iter())
+        .filter(|(c, _)| *c > 0)
+        .collect();
+    used.sort_by_key(|u| std::cmp::Reverse(u.0));
+    if !used.is_empty() {
+        let top: Vec<String> = used
+            .iter()
+            .take(5)
+            .map(|(c, n)| format!("{n} ({c})"))
+            .collect();
+        run.info(&format!("most-used inputs (splits): {}", top.join(", ")));
+    }
+    run.info(&format!(
+        "best val loss: {best_val:.4} after {best_rounds} of {done} rounds"
+    ));
     let status = if run.cancelled() { "cancelled" } else { "ok" };
     run.finish(status);
     Ok(0)
@@ -1352,8 +1578,18 @@ pub fn export_onnx(project: &Path, run_id: Option<&str>, out: &Path) -> std::io:
             err("no trained tabular run to export — run `axon train` first".into())
         })?,
     };
-    let model = crate::checkpoint::load(&crate::checkpoint::run_dir(project, &run_id))
-        .map_err(|e| err(format!("run {run_id}: {e}")))?;
+    let dir = crate::checkpoint::run_dir(project, &run_id);
+    if crate::text::Weights::load(&dir).is_ok() {
+        return Err(err(format!(
+            "run {run_id} is a text model: ONNX export supports the tabular MLP only for now (use `axon serve`)"
+        )));
+    }
+    let model = crate::checkpoint::load(&dir).map_err(|e| err(format!("run {run_id}: {e}")))?;
+    if model.trees.is_some() {
+        return Err(err(format!(
+            "run {run_id} is a boosted-trees model — ONNX export supports MLPs only for now"
+        )));
+    }
     let (mean, std) = model.schema.encoded_stats();
     let layers: Vec<crate::onnx::Dense> = model
         .weights

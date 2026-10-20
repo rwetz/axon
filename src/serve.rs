@@ -94,6 +94,10 @@ pub fn serve(project: &Path, run_id: &str) -> i32 {
         emit_error(&format!("run not found: {run_id}"));
         return 1;
     }
+    // A text run (a GPT) streams generated characters instead.
+    if dir.join("best-gpt.bin").is_file() {
+        return crate::text::serve(run_id, &dir, emit, emit_error);
+    }
     let model = match checkpoint::load(&dir) {
         Ok(m) => m,
         Err(msg) => {
@@ -167,6 +171,7 @@ mod tests {
                     b: vec![0.0; out_dim],
                 }],
             },
+            trees: None,
         }
     }
 

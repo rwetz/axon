@@ -1,0 +1,5 @@
+[env]
+# The fat-LTO release link (lto = true, codegen-units = 1) overflows rustc's
+# default stack on Windows (STATUS_STACK_BUFFER_OVERRUN) once burn and the
+# tree booster are linked together. A bigger compiler stack fixes it.
+RUST_MIN_STACK = "268435456"
