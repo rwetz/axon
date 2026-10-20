@@ -110,6 +110,11 @@ parsing. The fitted input schema rides in the checkpoint so `serve` and
 `export` encode rows exactly as training did; `export` now exports a trained
 run instead of retraining. Fixed square-layer weight orientation.
 
+### M9 — gradient-boosted trees (2026-10-20, v0.10.0)
+`[model] kind = "gbdt"`: a dependency-free histogram booster for the tabular
+template, sharing the MLP's encoding, metrics and `serve`. ONNX export of
+trees is a follow-up.
+
 ### Next
 - Text generation (a small transformer in burn), so the Synapse text
   template works without Python.

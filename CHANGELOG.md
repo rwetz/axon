@@ -4,6 +4,21 @@ All notable changes to Axon (named nexis-ml-rs up to v0.8). Versions follow
 [SemVer](https://semver.org/); pre-1.0, minor bumps may change the CLI.
 See [PLAN.md](PLAN.md) for the milestone-by-milestone story.
 
+## [0.10.0] — 2026-10-20 — gradient-boosted trees
+
+### Added
+- **Gradient-boosted trees for spreadsheets.** `[model] kind = "gbdt"` trains
+  a dependency-free histogram booster (second-order gradients, L2 leaves) on
+  the same encoded rows as the MLP, for classification and regression.
+  `[gbdt]` sets `trees`, `max_depth`, `learning_rate`, `min_leaf`, `l2`
+  and `max_bins`. Progress arrives as epochs of a few rounds, so curves, the
+  confusion matrix and residuals work unchanged; the best ensemble is saved as
+  `checkpoints/best-trees.json` and answered by `serve`. `export --onnx`
+  refuses tree runs for now.
+
+### Changed
+- The release link raises rustc's stack size (fat LTO overflowed it).
+
 ## [0.9.0] — 2026-10-14 — Axon: real-world spreadsheets
 
 ### Changed

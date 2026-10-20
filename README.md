@@ -20,7 +20,7 @@ line-oriented NDJSON protocol; Axon also works on its own from any terminal.
 ```sh
 cargo build --release          # produces target/release/axon(.exe)
 
-axon --version                 # → "axon 0.9.0"
+axon --version                 # → "axon 0.10.0"
 axon env                       # one-line JSON capability report
 axon new tabular my-run        # scaffold a project (templates: tabular | image)
 axon train my-run              # train; writes my-run/.nexis-ml/runs/<id>/
@@ -44,6 +44,7 @@ The model is described in `train.toml`, not code, and is chosen by what
 | `[data] path` | model | `[model]` keys |
 |---|---|---|
 | a `.csv` (or unset → synthetic data) | tabular **MLP** | `hidden = 16` or `hidden = [64, 32]` |
+| a `.csv`, with `[model] kind = "gbdt"` | **gradient-boosted trees** | `[gbdt]` `trees`, `max_depth`, `learning_rate`, `min_leaf`, `l2`, `max_bins` |
 | a folder of class sub-folders | image **CNN** | `conv1`, `conv2`, `hidden` |
 
 ### Spreadsheets (CSV)
@@ -81,6 +82,25 @@ class_weights = "auto"  # classification: auto | balanced | none
 The encoding is fitted on the training split only and saved in the
 checkpoint, so `serve` and `export` encode a row exactly the way training
 did.
+
+### Gradient-boosted trees
+
+`[model] kind = "gbdt"` trains a small histogram booster (second-order
+gradients, L2-regularized leaves, no dependencies) on the same encoded rows as
+the MLP. Progress is reported in "epochs" of a few rounds each, so the loss
+curve, confusion matrix and residuals work unchanged. The best ensemble by
+validation loss is saved and served by `serve`. Trees train on the CPU, and
+ONNX export is not available for them yet.
+
+```toml
+[model]
+kind = "gbdt"
+
+[gbdt]
+trees = 100
+max_depth = 4
+learning_rate = 0.1
+```
 
 ### Images
 
