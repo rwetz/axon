@@ -8,7 +8,8 @@
 //! and generic over the backend (`[train] device` picks CPU/ndarray or
 //! GPU/wgpu, both with autodiff). The model is chosen from `[data] path`: a
 //! folder of class sub-folders trains a **CNN** over its images; a CSV (or
-//! no path → synthetic) trains a declarative-depth **MLP** over tabular rows.
+//! no path → synthetic) trains a declarative-depth **MLP** over tabular rows;
+//! a `.txt` file trains a small character-level **GPT** (see `text.rs`).
 //! Both are configured in `train.toml` (`[model] hidden = 16 | [64, 32]` for
 //! the MLP; `conv1`/`conv2`/`hidden` for the CNN).
 //!
@@ -41,6 +42,7 @@ use crate::harness::Run;
 use crate::protocol::Emitter;
 use crate::run_store;
 use crate::tabular::{self, err, ColumnPrefs, Raw, Schema, Table, Task};
+use crate::text::run_text_training;
 
 /// The engine name recorded in run configs and the ONNX producer field.
 pub const ENGINE_NAME: &str = "axon";
@@ -684,6 +686,12 @@ pub fn train(project: &Path, emitter: &Emitter) -> std::io::Result<i32> {
                  remove [data] path to train on built-in synthetic data."
             )));
         }
+    }
+    // A plain-text file trains the text model (a small GPT over characters).
+    if let Some(p) = root.data.path.as_deref().filter(|p| p.to_ascii_lowercase().ends_with(".txt")) {
+        let text = project.join(p);
+        let want = want_gpu(&root.train.device, emitter);
+        return dispatch_backend!(run_text_training, want, project, emitter, &root.train, &text);
     }
     let trees = match root.model.kind.trim().to_ascii_lowercase().as_str() {
         "" | "mlp" => false,
@@ -1570,8 +1578,13 @@ pub fn export_onnx(project: &Path, run_id: Option<&str>, out: &Path) -> std::io:
             err("no trained tabular run to export — run `axon train` first".into())
         })?,
     };
-    let model = crate::checkpoint::load(&crate::checkpoint::run_dir(project, &run_id))
-        .map_err(|e| err(format!("run {run_id}: {e}")))?;
+    let dir = crate::checkpoint::run_dir(project, &run_id);
+    if crate::text::Weights::load(&dir).is_ok() {
+        return Err(err(format!(
+            "run {run_id} is a text model: ONNX export supports the tabular MLP only for now (use `axon serve`)"
+        )));
+    }
+    let model = crate::checkpoint::load(&dir).map_err(|e| err(format!("run {run_id}: {e}")))?;
     if model.trees.is_some() {
         return Err(err(format!(
             "run {run_id} is a boosted-trees model — ONNX export supports MLPs only for now"

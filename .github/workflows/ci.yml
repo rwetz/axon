@@ -1,0 +1,25 @@
+# Check and test on pull requests and main. Tests use the CPU (ndarray)
+# backend only; the wgpu path is compiled but not exercised here.
+name: CI
+
+on:
+  pull_request:
+    paths-ignore: ['**.md', 'docs/**', 'assets/**']
+  push:
+    branches: [main]
+    paths-ignore: ['**.md', 'docs/**', 'assets/**']
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo check --locked --all-targets
+      - run: cargo test --locked

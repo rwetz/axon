@@ -4,6 +4,21 @@ All notable changes to Axon (named nexis-ml-rs up to v0.8). Versions follow
 [SemVer](https://semver.org/); pre-1.0, minor bumps may change the CLI.
 See [PLAN.md](PLAN.md) for the milestone-by-milestone story.
 
+## [0.11.0] — unreleased — text
+
+### Added
+- **A text template.** `axon new text`, or `[data] path` set to a `.txt` file,
+  trains a small character-level GPT (pre-norm causal attention, GELU MLP,
+  weight-tied head; `[gpt]` sets `d_model`, `n_layers`, `n_heads`,
+  `context_len`, `steps_per_epoch`). Epochs log `loss/train`, `loss/val` and
+  `tokens/sec` and write a generated `text` artifact; the best weights are
+  saved as raw f32 with a JSON index.
+- **`serve` for text runs** streams `token` events and ends with a
+  `generation` event; requests take `prompt`, `max_tokens`, `temperature`,
+  `top_k`, `seed`. The forward pass is plain Rust, tested against burn's.
+- `env` reports `templates` and `text`.
+- CI: check and test on pull requests and main.
+
 ## [0.10.0] — 2026-10-20 — gradient-boosted trees
 
 ### Added

@@ -1,6 +1,6 @@
 [package]
 name = "axon"
-version = "0.10.0"
+version = "0.11.0"
 edition = "2021"
 description = "Axon — a single-binary ML engine (tabular MLPs and small CNNs, CPU or wgpu GPU) for the Nexis terminal's Synapse lab."
 license = "Apache-2.0"
