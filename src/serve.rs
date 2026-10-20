@@ -167,6 +167,7 @@ mod tests {
                     b: vec![0.0; out_dim],
                 }],
             },
+            trees: None,
         }
     }
 

@@ -13,6 +13,7 @@
 //! Exit codes: 0 ok, 1 error, 2 usage.
 
 mod checkpoint;
+mod gbdt;
 mod harness;
 mod model;
 mod onnx;
@@ -162,7 +163,17 @@ class_weights = \"auto\" # classification: auto | balanced | none
 # ignore = []          # columns to leave out (IDs, free text)
 
 [model]
+kind = \"mlp\"         # mlp (neural net) | gbdt (gradient-boosted trees)
 hidden = [16]        # MLP hidden-layer widths (a single int also works)
+
+# Used when kind = \"gbdt\" (trees train on the CPU; [train] epochs,
+# batch_size and lr don't apply).
+[gbdt]
+trees = 100
+max_depth = 4
+learning_rate = 0.1
+min_leaf = 2         # fewest rows a leaf may hold
+l2 = 1.0             # leaf-value regularization
 ";
 
 const IMAGE_TOML: &str = "\
