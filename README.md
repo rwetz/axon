@@ -210,3 +210,12 @@ With `--nexis-protocol`, stdout carries protocol v1 events (`run.started`,
 ## License
 
 Apache-2.0, same as Nexis.
+
+---
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/brand/heptagram-white.svg">
+    <img src="docs/brand/heptagram-black.svg" alt="heptagram" width="48">
+  </picture>
+</p>
