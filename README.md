@@ -1,8 +1,20 @@
 <p align="center">
-  <img src="assets/nexis-icon.png" alt="Nexis" width="120" height="120">
+  <img src="assets/nexis-icon.png" width="128" alt="Axon logo">
 </p>
 
-# Axon
+<h1 align="center">Axon</h1>
+
+<p align="center">
+  A single-binary ML engine for the Nexis terminal: MLPs and small CNNs on the CPU or any GPU, with no Python.
+</p>
+
+<p align="center">
+  <a href="https://github.com/rwetz/axon/actions/workflows/ci.yml"><img src="https://github.com/rwetz/axon/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/rwetz/axon/releases/latest"><img src="https://img.shields.io/github/v/release/rwetz/axon?color=8DBCE8&labelColor=101319" alt="Latest release"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-222B36?labelColor=101319" alt="License"></a>
+</p>
+
+<!-- TODO(readme-standard): add docs/main.png, a screenshot of the running app, and reference it here -->
 
 A **single-binary ML engine** for the [Nexis](https://github.com/rwetz/Nexis)
 terminal. Axon trains the models behind Nexis's **Synapse** lab: small MLPs
