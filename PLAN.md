@@ -110,9 +110,21 @@ parsing. The fitted input schema rides in the checkpoint so `serve` and
 `export` encode rows exactly as training did; `export` now exports a trained
 run instead of retraining. Fixed square-layer weight orientation.
 
+### M9 — gradient-boosted trees (2026-10-20, v0.10.0)
+`[model] kind = "gbdt"`: a dependency-free histogram booster for the tabular
+template, sharing the MLP's encoding, metrics and `serve`. ONNX export of
+trees is a follow-up.
+
+### M10 — text: a small GPT in burn (v0.11.0)
+`axon new text` / a `.txt` data path trains a character-level decoder-only
+transformer, the same shape as BibleLM's PyTorch model, so BibleLM's Lab and
+the Synapse text template can train without Python. `serve` streams
+generated characters from a plain-Rust forward pass over the saved weights,
+tested against burn's own forward pass.
+
 ### Next
-- Text generation (a small transformer in burn), so the Synapse text
-  template works without Python.
+- BibleLM's Lab on Axon: drive `axon train` / `serve` from its Training and
+  Generate tabs.
 - Image models in `serve` and CNN ONNX export.
 - Evaluation: per-class precision/recall, permutation feature importance, a
   held-out test split.

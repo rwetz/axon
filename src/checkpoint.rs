@@ -16,10 +16,14 @@ use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
+use crate::gbdt::Ensemble;
 use crate::tabular::{Raw, Schema, Task};
 
 #[derive(Deserialize)]
 struct BestMeta {
+    /// `gbdt` for a tree ensemble; absent (or `mlp`) for the dense stack.
+    #[serde(default)]
+    kind: Option<String>,
     classes: Vec<String>,
     #[serde(default)]
     task: Option<Task>,
@@ -74,6 +78,8 @@ pub struct Model {
     pub y_mean: f32,
     pub y_std: f32,
     pub weights: WeightsFile,
+    /// Set for a boosted-trees run; `weights` is then empty.
+    pub trees: Option<Ensemble>,
 }
 
 pub fn run_dir(project: &Path, run_id: &str) -> PathBuf {
@@ -88,10 +94,8 @@ pub fn latest_run(project: &Path) -> Option<String> {
         .ok()?
         .filter_map(|e| e.ok())
         .filter(|e| {
-            e.path()
-                .join("checkpoints")
-                .join("best-weights.json")
-                .is_file()
+            let ck = e.path().join("checkpoints");
+            ck.join("best-weights.json").is_file() || ck.join("best-trees.json").is_file()
         })
         .filter_map(|e| e.file_name().into_string().ok())
         .collect();
@@ -122,6 +126,34 @@ pub fn load(dir: &Path) -> Result<Model, String> {
         }
     };
     let task = meta.task.unwrap_or(Task::Classification);
+    let want_out = match task {
+        Task::Classification => meta.classes.len(),
+        Task::Regression => 1,
+    };
+
+    if meta.kind.as_deref() == Some("gbdt") {
+        let t_path = dir.join("checkpoints").join("best-trees.json");
+        let t_text = std::fs::read_to_string(&t_path)
+            .map_err(|_| "this run has no saved trees".to_string())?;
+        let trees: Ensemble =
+            serde_json::from_str(&t_text).map_err(|e| format!("unreadable trees: {e}"))?;
+        if trees.outputs != want_out || trees.base.len() != want_out {
+            return Err(format!(
+                "trees have {} outputs but the checkpoint expects {want_out}",
+                trees.outputs
+            ));
+        }
+        return Ok(Model {
+            task,
+            target: meta.target,
+            classes: meta.classes,
+            schema,
+            y_mean: meta.y_mean,
+            y_std: meta.y_std,
+            weights: WeightsFile { layers: Vec::new() },
+            trees: Some(trees),
+        });
+    }
 
     let w_path = dir.join("checkpoints").join("best-weights.json");
     let w_text = std::fs::read_to_string(&w_path).map_err(|_| {
@@ -133,10 +165,6 @@ pub fn load(dir: &Path) -> Result<Model, String> {
         serde_json::from_str(&w_text).map_err(|e| format!("unreadable weights: {e}"))?;
 
     // Sanity: the stack must map the schema's inputs → the task's outputs.
-    let want_out = match task {
-        Task::Classification => meta.classes.len(),
-        Task::Regression => 1,
-    };
     let first_in = weights.layers.first().map(|l| l.in_dim).unwrap_or(0);
     let last_out = weights.layers.last().map(|l| l.out_dim).unwrap_or(0);
     if first_in != schema.width() || last_out != want_out {
@@ -159,6 +187,7 @@ pub fn load(dir: &Path) -> Result<Model, String> {
         y_mean: meta.y_mean,
         y_std: meta.y_std,
         weights,
+        trees: None,
     })
 }
 
@@ -199,7 +228,11 @@ pub enum Prediction {
 
 impl Model {
     pub fn predict<'a>(&self, get: impl Fn(&str) -> Raw<'a>) -> Prediction {
-        let out = forward(&self.weights.layers, &self.schema.encode(get));
+        let x = self.schema.encode(get);
+        let out = match &self.trees {
+            Some(t) => t.predict(&x),
+            None => forward(&self.weights.layers, &x),
+        };
         match self.task {
             Task::Classification => {
                 let probs = softmax(&out);
@@ -262,6 +295,7 @@ mod tests {
             weights: WeightsFile {
                 layers: vec![layer(vec![vec![2.0]], vec![0.0])],
             },
+            trees: None,
         };
         // f = 1.5 → standardized output 3.0 → 3·10 + 100.
         match model.predict(|_| Raw::Num(1.5)) {

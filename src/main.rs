@@ -13,6 +13,7 @@
 //! Exit codes: 0 ok, 1 error, 2 usage.
 
 mod checkpoint;
+mod gbdt;
 mod harness;
 mod model;
 mod onnx;
@@ -20,6 +21,7 @@ mod protocol;
 mod run_store;
 mod serve;
 mod tabular;
+mod text;
 
 use std::path::Path;
 
@@ -134,6 +136,8 @@ fn cmd_env() -> i32 {
         "serve": true,
         "tasks": ["classification", "regression"],
         "categorical": true,
+        "templates": ["tabular", "image", "text"],
+        "text": true,
     });
     println!("{}", serde_json::to_string(&info).unwrap_or_default());
     0
@@ -162,7 +166,17 @@ class_weights = \"auto\" # classification: auto | balanced | none
 # ignore = []          # columns to leave out (IDs, free text)
 
 [model]
+kind = \"mlp\"         # mlp (neural net) | gbdt (gradient-boosted trees)
 hidden = [16]        # MLP hidden-layer widths (a single int also works)
+
+# Used when kind = \"gbdt\" (trees train on the CPU; [train] epochs,
+# batch_size and lr don't apply).
+[gbdt]
+trees = 100
+max_depth = 4
+learning_rate = 0.1
+min_leaf = 2         # fewest rows a leaf may hold
+l2 = 1.0             # leaf-value regularization
 ";
 
 const IMAGE_TOML: &str = "\
@@ -188,6 +202,36 @@ conv2 = 32
 hidden = 64
 ";
 
+const TEXT_TOML: &str = "# Axon — a small GPT over characters (the shape of BibleLM's model).
+# Ships a short public-domain sample under data/ so `axon train` works
+# right away; point [data] path at any plain-text file (a whole Bible is
+# about 4 MB and trains well on a GPU).
+
+[train]
+epochs = 10
+batch_size = 16
+lr = 0.0003
+val_split = 0.1
+seed = 42
+device = \"auto\"       # auto | cpu | gpu  (a GPU helps a lot here)
+
+[data]
+path = \"data/corpus.txt\"
+
+[gpt]
+d_model = 64          # BibleLM's released model: 256 / 4 / 4 / 256
+n_layers = 2
+n_heads = 4
+context_len = 64
+steps_per_epoch = 100
+eval_batches = 4
+sample_chars = 200
+sample_prompt = \"And God said\"
+";
+
+/// A few public-domain chapters (KJV), so the text template trains out of the box.
+const TEXT_SAMPLE: &str = include_str!("../assets/text-sample.txt");
+
 /// `new <template> [dir]` — template first; dir defaults to `./<template>`.
 /// Scaffolds the template's `train.toml`, plus example images for `image`
 /// so it trains out of the box.
@@ -197,8 +241,9 @@ fn cmd_new(pos: &[String]) -> i32 {
     let toml = match template {
         "tabular" => TABULAR_TOML,
         "image" => IMAGE_TOML,
+        "text" => TEXT_TOML,
         other => {
-            eprintln!("error: unknown template '{other}' (this engine supports: tabular, image)");
+            eprintln!("error: unknown template '{other}' (this engine supports: tabular, image, text)");
             return 2;
         }
     };
@@ -213,6 +258,13 @@ fn cmd_new(pos: &[String]) -> i32 {
     }
     // The image template ships example data so `train` works out of the box
     // (the tabular template uses synthetic data).
+    if template == "text" {
+        let data = path.join("data");
+        if let Err(e) = std::fs::create_dir_all(&data).and_then(|_| std::fs::write(data.join("corpus.txt"), TEXT_SAMPLE)) {
+            eprintln!("error: writing the sample text: {e}");
+            return 1;
+        }
+    }
     if template == "image" {
         if let Err(e) = write_example_images(&path.join("data")) {
             eprintln!("error: writing example images: {e}");
